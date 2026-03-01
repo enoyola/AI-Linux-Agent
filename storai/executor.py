@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -38,10 +39,40 @@ class Executor:
         if spec.command not in DEVICE_MUTATION_COMMANDS:
             return
         for arg in spec.args:
-            if arg.startswith("/dev/"):
-                report = verify_device_safety(arg)
-                if not report.ok:
-                    raise SafetyError(f"Device safety check failed for {arg}: {', '.join(report.reasons)}")
+            if not arg.startswith("/dev/"):
+                continue
+
+            report = verify_device_safety(arg)
+            if report.ok:
+                continue
+
+            # Partition nodes may briefly lag after `parted` writes.
+            if spec.command.startswith("mkfs.") and any("Device not found" in reason for reason in report.reasons):
+                parent = self._partition_parent(arg)
+                if parent:
+                    parent_report = verify_device_safety(parent)
+                    if parent_report.ok:
+                        continue
+                    raise SafetyError(
+                        f"Device safety check failed for {arg}; parent {parent} unsafe: "
+                        f"{', '.join(parent_report.reasons)}"
+                    )
+
+            raise SafetyError(f"Device safety check failed for {arg}: {', '.join(report.reasons)}")
+
+    @staticmethod
+    def _partition_parent(path: str) -> str | None:
+        # /dev/sdc1 -> /dev/sdc
+        m_std = re.match(r"^(/dev/[a-zA-Z]+)\d+$", path)
+        if m_std:
+            return m_std.group(1)
+
+        # /dev/nvme0n1p1 -> /dev/nvme0n1
+        m_nvme = re.match(r"^(/dev/nvme\d+n\d+)p\d+$", path)
+        if m_nvme:
+            return m_nvme.group(1)
+
+        return None
 
     def run_spec(self, spec: CommandSpec) -> CommandResult:
         validate_command_allowlist(spec)
