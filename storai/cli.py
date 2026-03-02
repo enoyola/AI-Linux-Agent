@@ -135,7 +135,10 @@ def plan_mount(
 def apply(
     planfile: Path,
     execute: Annotated[bool, typer.Option("--execute", help="Actually execute write commands")] = False,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print only; no execution")] = True,
+    dry_run: Annotated[
+    bool,
+    typer.Option("--dry-run/--no-dry-run", help="Print only; no execution"),
+] = True,
 ) -> None:
     """Apply a saved plan with strict confirmation checks."""
     if not planfile.exists():
