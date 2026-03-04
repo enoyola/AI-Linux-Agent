@@ -57,6 +57,12 @@ class _JSONLLMBase(LLMClient):
     advice_adapter = TypeAdapter(AdviceBundle)
     plan_adapter = TypeAdapter(Plan)
 
+    @staticmethod
+    def _safe_context(context: dict[str, Any]) -> dict[str, Any]:
+        # Drop non-serializable helper object used by offline rules.
+        sanitized = {k: v for k, v in context.items() if k != "space_analysis_obj"}
+        return json.loads(json.dumps(sanitized, default=str))
+
     def _advice_prompt(self, context: dict[str, Any]) -> str:
         schema = {
             "summary": "string",
@@ -92,7 +98,7 @@ class _JSONLLMBase(LLMClient):
             "Never include commands outside that allowlist.\n"
             f"Schema: {json.dumps(schema)}\n"
             f"Example: {json.dumps(example)}\n"
-            f"Context JSON: {json.dumps(context)}"
+            f"Context JSON: {json.dumps(self._safe_context(context))}"
         )
 
     def _plan_prompt(self, context: dict[str, Any], goal: str) -> str:
@@ -126,7 +132,7 @@ class _JSONLLMBase(LLMClient):
             f"Allowed commands list: {allowlist_table()}\n"
             "Never include commands outside that allowlist.\n"
             f"Schema: {json.dumps(schema)}\n"
-            f"Context JSON: {json.dumps(context)}"
+            f"Context JSON: {json.dumps(self._safe_context(context))}"
         )
 
     def _parse_advice(self, text: str) -> AdviceBundle:
@@ -179,7 +185,7 @@ class OpenAIClient(_JSONLLMBase):
         return self._parse_plan(self._chat(self._plan_prompt(context, goal)))
 
     def explain_findings(self, context: dict[str, Any]) -> str:
-        prompt = "Explain findings in plain English in <= 120 words.\n" + json.dumps(context)
+        prompt = "Explain findings in plain English in <= 120 words.\n" + json.dumps(self._safe_context(context))
         return self._chat(prompt)
 
 
@@ -214,5 +220,5 @@ class AnthropicClient(_JSONLLMBase):
         return self._parse_plan(self._chat(self._plan_prompt(context, goal)))
 
     def explain_findings(self, context: dict[str, Any]) -> str:
-        prompt = "Explain findings in plain English in <= 120 words.\n" + json.dumps(context)
+        prompt = "Explain findings in plain English in <= 120 words.\n" + json.dumps(self._safe_context(context))
         return self._chat(prompt)
