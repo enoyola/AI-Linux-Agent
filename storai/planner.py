@@ -15,7 +15,7 @@ from storai.llm_client import (
     OpenAIClient,
 )
 from storai.models import AdviceBundle, CommandSpec, Plan, PlanStep, RiskLevel
-from storai.safety import SafetyError, confirmation_phrase_for_format, verify_device_safety
+from storai.safety import SafetyError, confirmation_phrase_for_format, device_inventory, verify_device_safety
 from storai.utils import host_meta, read_os_release
 
 
@@ -68,7 +68,30 @@ class Planner:
             warnings.append(f"AI output invalid; fallback to offline rules: {exc}")
             return self.offline.generate_advice(context), warnings
 
-    def plan_mount(self, device: str, mountpoint: str, fstype: str) -> Plan:
+    def suggest_safe_disk(self, min_size_gb: int = 1) -> str:
+        inv = device_inventory()
+        min_bytes = min_size_gb * (1024**3)
+        candidates: list[str] = []
+
+        for path, ident in inv.items():
+            if ident.devtype != "disk":
+                continue
+            if ident.size < min_bytes:
+                continue
+            # Require clean whole disk unless user explicitly chooses otherwise.
+            if ident.mountpoints:
+                continue
+            if ident.fstype:
+                continue
+            report = verify_device_safety(path)
+            if report.ok:
+                candidates.append(path)
+
+        if not candidates:
+            raise SafetyError(f"No safe unmounted whole disk found with at least {min_size_gb} GiB free")
+        return sorted(candidates)[0]
+
+    def plan_mount(self, device: str, mountpoint: str, fstype: str, size_gb: int | None = None) -> Plan:
         safety = verify_device_safety(device)
         warnings: list[str] = []
         if not safety.ok:
@@ -86,10 +109,19 @@ class Planner:
                 raise SafetyError(f"Target must be a whole disk (type=disk). Got type={identity.devtype}")
             if identity.fstype:
                 raise SafetyError(f"Target already has filesystem signature: {identity.fstype}")
+            if size_gb is not None and identity.size < size_gb * (1024**3):
+                raise SafetyError(f"Device {device} is smaller than requested size {size_gb} GiB")
             warnings.append(
                 "Target device identity verified: "
                 f"NAME={identity.name} SIZE={identity.size} MODEL={identity.model or '-'} SERIAL={identity.serial or '-'}"
             )
+
+        partition_end = "100%" if size_gb is None else f"{size_gb}GiB"
+        partition_title = "Partition disk GPT with one full partition"
+        partition_rationale = "Create GPT and a single data partition across full disk."
+        if size_gb is not None:
+            partition_title = f"Partition disk GPT with one {size_gb}GiB partition"
+            partition_rationale = f"Create GPT and a single {size_gb}GiB partition from start of disk."
 
         steps = [
             PlanStep(
@@ -106,12 +138,12 @@ class Planner:
             ),
             PlanStep(
                 id="partition",
-                title="Partition disk GPT with one full partition",
-                rationale="Create GPT and a single data partition across full disk.",
+                title=partition_title,
+                rationale=partition_rationale,
                 risk=RiskLevel.HIGH,
                 commands=[
                     CommandSpec(command="parted", args=["-s", device, "mklabel", "gpt"], rationale="Create GPT label.", read_only=False, requires_root=True),
-                    CommandSpec(command="parted", args=["-s", device, "mkpart", "primary", fstype, "0%", "100%"], rationale="Create partition.", read_only=False, requires_root=True),
+                    CommandSpec(command="parted", args=["-s", device, "mkpart", "primary", fstype, "0%", partition_end], rationale="Create partition.", read_only=False, requires_root=True),
                 ],
             ),
             PlanStep(
@@ -155,8 +187,9 @@ class Planner:
             ),
         ]
 
+        size_note = "full disk" if size_gb is None else f"{size_gb}GiB"
         return Plan(
-            goal=f"Prepare and mount {device} at {mountpoint} ({fstype})",
+            goal=f"Prepare and mount {device} at {mountpoint} ({fstype}, {size_note})",
             steps=steps,
             warnings=warnings,
             rollback=[
