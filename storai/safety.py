@@ -147,6 +147,15 @@ def verify_device_safety(device: str) -> DeviceSafetyReport:
     if ident.mountpoints:
         reasons.append(f"Device has mountpoints: {', '.join(ident.mountpoints)}")
 
+    # For whole disks, also inspect child partitions (pkname == disk name).
+    if ident.devtype == "disk":
+        children = [d for d in inv.values() if d.pkname == ident.name]
+        child_mounts = [mp for d in children for mp in d.mountpoints]
+        if child_mounts:
+            reasons.append(f"Disk has mounted child partitions: {', '.join(sorted(set(child_mounts)))}")
+        if any(mp in ROOT_MOUNT_BLOCKLIST for mp in child_mounts):
+            reasons.append("Disk contains protected mounted partitions (/, /boot, or /boot/efi)")
+
     parent = inv.get(_parent_path(ident) or "")
     if parent and any(mp in ROOT_MOUNT_BLOCKLIST for mp in parent.mountpoints):
         reasons.append(f"Parent disk {parent.path} hosts protected mountpoints")

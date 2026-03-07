@@ -52,11 +52,14 @@ def _extract_size_gb(text: str) -> int | None:
 
 def _extract_mount_request(text: str) -> tuple[str | None, str, str, int | None]:
     device_match = re.search(r"(/dev/[a-zA-Z0-9._/-]+)", text)
+    bare_device_match = re.search(r"\b((?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+))\b", text.lower())
     mountpoint_match = re.search(r"(\s|^)(/[a-zA-Z0-9._/-]+)", text)
     fstype = "xfs" if "xfs" in text.lower() else "ext4"
     size_gb = _extract_size_gb(text)
 
     device = device_match.group(1) if device_match else None
+    if device is None and bare_device_match:
+        device = f"/dev/{bare_device_match.group(1)}"
 
     mountpoint = "/data"
     if mountpoint_match:
