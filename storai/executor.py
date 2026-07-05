@@ -12,8 +12,8 @@ from storai.models import CommandResult, CommandSpec, Plan
 from storai.safety import SafetyError, validate_command_allowlist, verify_device_safety
 from storai.utils import ensure_log_file
 
-WRITE_COMMANDS = {"parted", "mkfs.ext4", "mkfs.xfs", "mkdir", "mount", "umount", "apt", "apt-get", "dnf", "yum", "truncate", "tee"}
-DEVICE_MUTATION_COMMANDS = {"parted", "mkfs.ext4", "mkfs.xfs"}
+WRITE_COMMANDS = {"parted", "mkfs.ext4", "mkfs.xfs", "pvcreate", "vgcreate", "lvcreate", "mkdir", "mount", "umount", "apt", "apt-get", "dnf", "yum", "truncate", "tee"}
+DEVICE_MUTATION_COMMANDS = {"parted", "mkfs.ext4", "mkfs.xfs", "pvcreate"}
 
 
 class Executor:

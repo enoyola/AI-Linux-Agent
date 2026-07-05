@@ -50,6 +50,19 @@ def _extract_size_gb(text: str) -> int | None:
     return int(m.group(1))
 
 
+def _extract_lvm_names(text: str) -> tuple[str, str]:
+    vg_name = "data-vg"
+    lv_name = "data-lv"
+
+    m_vg = re.search(r"\bvg\s+([a-zA-Z0-9_.-]+)", text.lower())
+    m_lv = re.search(r"\blv\s+([a-zA-Z0-9_.-]+)", text.lower())
+    if m_vg:
+        vg_name = m_vg.group(1)
+    if m_lv:
+        lv_name = m_lv.group(1)
+    return vg_name, lv_name
+
+
 def _extract_mount_request(text: str) -> tuple[str | None, str, str, int | None]:
     device_match = re.search(r"(/dev/[a-zA-Z0-9._/-]+)", text)
     bare_device_match = re.search(r"\b((?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+))\b", text.lower())
@@ -133,6 +146,7 @@ def _handle_chat_request(planner: Planner, request: str, execute: bool, dry_run:
 
     if any(k in req_l for k in ["mount", "format", "filesystem", "file system", "create filesystem"]):
         device, mountpoint, fstype, size_gb = _extract_mount_request(request)
+        vg_name, lv_name = _extract_lvm_names(request)
 
         if device is None:
             min_size = size_gb or 1
@@ -143,12 +157,19 @@ def _handle_chat_request(planner: Planner, request: str, execute: bool, dry_run:
                 raise typer.Exit(code=2) from exc
             console.print(f"[cyan]Auto-selected safe disk:[/cyan] {device}")
 
-        plan = planner.plan_mount(device=device, mountpoint=mountpoint, fstype=fstype, size_gb=size_gb)
+        use_lvm = not any(k in req_l for k in ["non-lvm", "without lvm", "plain partition"])
+        if use_lvm:
+            console.print(f"[cyan]Layout:[/cyan] LVM (vg={vg_name}, lv={lv_name})")
+            plan = planner.plan_lvm(device=device, mountpoint=mountpoint, fstype=fstype, size_gb=size_gb, vg_name=vg_name, lv_name=lv_name)
+        else:
+            console.print("[cyan]Layout:[/cyan] plain partition")
+            plan = planner.plan_mount(device=device, mountpoint=mountpoint, fstype=fstype, size_gb=size_gb)
+
         _execute_plan_interactive(plan, execute=execute, dry_run=dry_run)
         return
 
-    console.print("I can help with: scan, space analysis, cleanup advice, and mount plan/apply requests.")
-    console.print("Example: storai chat \"create a filesystem of 16 GB and mount at /data\" --execute --no-dry-run")
+    console.print("I can help with: scan, space analysis, cleanup advice, and filesystem provisioning requests.")
+    console.print("Example: storai chat \"create lvm filesystem of 16 GB on sdc mount at /data as xfs vg data-vg lv data-lv\" --execute --no-dry-run")
 
 
 @app.callback()
@@ -264,9 +285,32 @@ def plan_mount(
     out: Annotated[Path | None, typer.Option("--out", help="Write plan JSON file")] = None,
     output: Annotated[str, typer.Option("--output", help="text|json")] = "text",
 ) -> None:
-    """Build a safe mount plan. Does not execute changes."""
+    """Build a safe mount plan (non-LVM)."""
     planner = _planner(ctx.obj)
     plan = planner.plan_mount(device=device, mountpoint=mountpoint, fstype=fstype, size_gb=size_gb)
+    if out:
+        out.write_text(json.dumps(plan.model_dump(mode="json"), indent=2), encoding="utf-8")
+    if output == "json":
+        console.print_json(to_json(plan))
+    else:
+        console.print(plan_to_markdown(plan))
+
+
+@plan_app.command("lvm")
+def plan_lvm(
+    ctx: typer.Context,
+    device: Annotated[str, typer.Option("--device")],
+    mountpoint: Annotated[str, typer.Option("--mountpoint")],
+    fstype: Annotated[str, typer.Option("--fstype")] = "xfs",
+    vg_name: Annotated[str, typer.Option("--vg-name")] = "data-vg",
+    lv_name: Annotated[str, typer.Option("--lv-name")] = "data-lv",
+    size_gb: Annotated[int | None, typer.Option("--size-gb", help="Optional LV size in GiB (default: all free)")] = None,
+    out: Annotated[Path | None, typer.Option("--out", help="Write plan JSON file")] = None,
+    output: Annotated[str, typer.Option("--output", help="text|json")] = "text",
+) -> None:
+    """Build a safe LVM plan."""
+    planner = _planner(ctx.obj)
+    plan = planner.plan_lvm(device=device, mountpoint=mountpoint, fstype=fstype, size_gb=size_gb, vg_name=vg_name, lv_name=lv_name)
     if out:
         out.write_text(json.dumps(plan.model_dump(mode="json"), indent=2), encoding="utf-8")
     if output == "json":
